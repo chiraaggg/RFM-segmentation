@@ -9,7 +9,7 @@ st.set_page_config(page_title="🧠 RFM + KMeans Segmentation", layout="wide")
 st.title("🧠 RFM Segmentation Dashboard (with KMeans Option)")
 
 st.markdown("Upload a single `orders.csv` file with the following columns:")
-st.code("user_id, created_at, total, sub_total, discount, coupon_id, payment_method, actual_qty, user_created_at")
+st.code("user_id, created_at, total, sub_total, discount, coupon_id, payment_method, actual_qty, user_created_at, name, phone")
 
 uploaded_file = st.file_uploader("📤 Upload orders.csv", type=["csv"])
 
@@ -19,12 +19,14 @@ if uploaded_file:
     df['user_created_at'] = pd.to_datetime(df['user_created_at'])
     today = pd.to_datetime("today")
 
-    # RFM Table
+    # RFM Table with phone and name
     rfm = df.groupby('user_id').agg(
         last_order_date=('created_at', 'max'),
         frequency=('user_id', 'count'),
         monetary=('total', 'sum'),
-        user_created_at=('user_created_at', 'min')
+        user_created_at=('user_created_at', 'min'),
+        name=('name', 'first'),
+        phone=('phone', 'first')
     ).reset_index()
     rfm['recency'] = (today - rfm['last_order_date']).dt.days
     rfm['account_age_days'] = (today - rfm['user_created_at']).dt.days
@@ -105,68 +107,63 @@ if uploaded_file:
     st.altair_chart(bar_chart, use_container_width=True)
 
     # --- Export Segments CSV ---
-    st.subheader("📥 Export Segmented Users (user_id + segment only)")
-    export_df = rfm[['user_id', 'segment']]
+    st.subheader("📥 Export Segmented Users (user_id, name, phone, segment)")
+    export_df = rfm[['user_id', 'name', 'phone', 'segment']]
     csv = export_df.to_csv(index=False).encode('utf-8')
     st.download_button("Download CSV", csv, "rfm_segments.csv", "text/csv")
 
-
-
+    # --- Previous Segment Comparison ---
     st.subheader("📂 Previous Segment Comparison (Optional)")
-prev_file = st.file_uploader("Upload previous segmented CSV (user_id, segment)", type=["csv"], key="prev_file_upload")
+    prev_file = st.file_uploader("Upload previous segmented CSV (user_id, segment)", type=["csv"], key="prev_file_upload")
 
+    if prev_file:
+        prev_df = pd.read_csv(prev_file)
+        if 'user_id' in prev_df.columns and 'segment' in prev_df.columns:
+            st.success("✅ Previous segmented data uploaded!")
 
-if prev_file:
-    prev_df = pd.read_csv(prev_file)
-    if 'user_id' in prev_df.columns and 'segment' in prev_df.columns:
-        st.success("✅ Previous segmented data uploaded!")
+            # --- Segment Size Change ---
+            prev_counts = prev_df['segment'].value_counts().reset_index()
+            prev_counts.columns = ['segment', 'prev_users']
 
-        # --- Segment Size Change ---
-        prev_counts = prev_df['segment'].value_counts().reset_index()
-        prev_counts.columns = ['segment', 'prev_users']
+            current_counts = rfm['segment'].value_counts().reset_index()
+            current_counts.columns = ['segment', 'current_users']
 
-        current_counts = rfm['segment'].value_counts().reset_index()
-        current_counts.columns = ['segment', 'current_users']
+            merged_counts = pd.merge(prev_counts, current_counts, on='segment', how='outer').fillna(0)
+            merged_counts['change_in_users'] = merged_counts['current_users'] - merged_counts['prev_users']
+            merged_counts['Change Rate (%)'] = (merged_counts['change_in_users'] / merged_counts['prev_users'].replace(0, 1) * 100).round(2)
 
-        merged_counts = pd.merge(prev_counts, current_counts, on='segment', how='outer').fillna(0)
-        merged_counts['change_in_users'] = merged_counts['current_users'] - merged_counts['prev_users']
-        merged_counts['Change Rate (%)'] = (merged_counts['change_in_users'] / merged_counts['prev_users'].replace(0, 1) * 100).round(2)
+            st.markdown("### 📊 Segment Size Change from Previous Run")
+            st.dataframe(merged_counts)
 
-        st.markdown("### 📊 Segment Size Change from Previous Run")
-        st.dataframe(merged_counts)
+            # --- Reorder Analysis After Date Range ---
+            st.markdown("### 🔄 Reorder Conversion by Segment")
 
-        # --- Reorder Analysis After Date Range ---
-        st.markdown("### 🔄 Reorder Conversion by Segment")
+            st.markdown("#### 📅 Select Date Range to Track Reorders")
+            col1, col2 = st.columns(2)
+            with col1:
+                start_date = st.date_input("Start date", key="start_date_picker")
+            with col2:
+                end_date = st.date_input("End date", value=datetime.today(), key="end_date_picker")
 
-        st.markdown("#### 📅 Select Date Range to Track Reorders")
-        col1, col2 = st.columns(2)
-        with col1:
-            start_date = st.date_input("Start date", key="start_date_picker")
-        with col2:
-            end_date = st.date_input("End date", value=datetime.today(), key="end_date_picker")
+            # Filter users from previous segments who ordered within the range
+            prev_segment_users = prev_df[['user_id', 'segment']]
+            df['created_at'] = pd.to_datetime(df['created_at'])
+            mask = (df['created_at'].dt.date >= start_date) & (df['created_at'].dt.date <= end_date)
+            reorder_users = df[mask][['user_id']].drop_duplicates()
 
-        # Filter users from previous segments who ordered within the range
-        prev_segment_users = prev_df[['user_id', 'segment']]
-        df['created_at'] = pd.to_datetime(df['created_at'])
-        mask = (df['created_at'].dt.date >= start_date) & (df['created_at'].dt.date <= end_date)
-        reorder_users = df[mask][['user_id']].drop_duplicates()
+            reordered_df = prev_segment_users.merge(reorder_users, on='user_id', how='inner')
 
-        reordered_df = prev_segment_users.merge(reorder_users, on='user_id', how='inner')
+            reorder_summary = reordered_df.groupby('segment').agg(
+                reordered_users=('user_id', 'nunique')
+            ).reset_index()
 
-        reorder_summary = reordered_df.groupby('segment').agg(
-            reordered_users=('user_id', 'nunique')
-        ).reset_index()
+            reorder_summary = pd.merge(prev_counts, reorder_summary, on='segment', how='left').fillna(0)
+            reorder_summary['Conversion Rate (%)'] = (reorder_summary['reordered_users'] / reorder_summary['prev_users'] * 100).round(2)
 
-        reorder_summary = pd.merge(prev_counts, reorder_summary, on='segment', how='left').fillna(0)
-        reorder_summary['Conversion Rate (%)'] = (reorder_summary['reordered_users'] / reorder_summary['prev_users'] * 100).round(2)
-
-        st.dataframe(reorder_summary)
-
-
-    else:
-        st.warning("⚠️ Previous file must contain `user_id` and `segment` columns.")
-
+            st.dataframe(reorder_summary)
+        else:
+            st.warning("⚠️ Previous file must contain `user_id` and `segment` columns.")
 
     # --- Optional Preview ---
     if st.checkbox("👁️ Show Sample Data"):
-        st.dataframe(rfm[['user_id', 'recency', 'frequency', 'monetary', 'segment']].head())
+        st.dataframe(rfm[['user_id', 'name', 'phone', 'recency', 'frequency', 'monetary', 'segment']].head())
