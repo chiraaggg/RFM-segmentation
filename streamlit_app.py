@@ -106,11 +106,30 @@ if uploaded_file:
     )
     st.altair_chart(bar_chart, use_container_width=True)
 
-    # --- Export Segments CSV ---
-    st.subheader("📥 Export Segmented Users (user_id, name, phone, segment)")
-    export_df = rfm[['user_id', 'name', 'phone', 'segment']]
-    csv = export_df.to_csv(index=False).encode('utf-8')
-    st.download_button("Download CSV", csv, "rfm_segments.csv", "text/csv")
+    # --- Export Segments Separately ---
+    st.subheader("📥 Export Segmented Users by Segment")
+    
+    segment_list = rfm['segment'].unique()
+    segment_list.sort()
+    today_str = datetime.today().strftime('%Y-%m-%d')
+    
+    for segment in segment_list:
+        seg_df = rfm[rfm['segment'] == segment][['phone', 'name']].rename(columns={
+            'phone': 'MOBILE',
+            'name': 'FIRSTNAME'
+        })
+    
+        seg_csv = seg_df.to_csv(index=False).encode('utf-8')
+        file_name = f"{segment.replace(' ', '_').lower()}_users_{today_str}.csv"
+    
+        st.download_button(
+            label=f"Download {segment} Users",
+            data=seg_csv,
+            file_name=file_name,
+            mime="text/csv",
+            key=f"download_{segment}"
+        )
+
 
     # --- Previous Segment Comparison ---
     st.subheader("📂 Previous Segment Comparison (Optional)")
